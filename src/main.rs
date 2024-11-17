@@ -1,11 +1,85 @@
-use std::{time::Duration, thread::sleep, error::Error};
-use std::fmt::format;
+use std::{time::Duration, thread::sleep, error::Error, env};
 use std::net::UdpSocket;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use clap::{Parser, Subcommand};
 use rand::{thread_rng, Rng};
 use rand::distr::Alphanumeric;
 
-const PASSWORD_LENGTH: usize = 24;
+const SEQ_NUM_SIZE: usize = 8;
+const PASSWORD_SIZE: usize = 32;
+const TIMESTAMP_SIZE: usize = 16;
+const MESSAGE_SIZE: usize = SEQ_NUM_SIZE + PASSWORD_SIZE + TIMESTAMP_SIZE;
+
+struct Packet {
+    seq_num: u64,
+    password: String,
+    timestamp: u128,
+}
+
+impl Packet {
+    fn new(seq_num: u64, password: String) -> Result<Self, Box<dyn Error>> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis();
+
+        Ok(Self {
+            seq_num: seq_num,
+            password: password,
+            timestamp: timestamp,
+        })
+    }
+
+    fn to_u8_array(&self) -> [u8; MESSAGE_SIZE] {
+        let mut message = [0u8; MESSAGE_SIZE];
+        message[0..SEQ_NUM_SIZE].copy_from_slice(&self.seq_num.to_le_bytes());
+
+        let password_bytes = self.password.as_bytes();
+        message[SEQ_NUM_SIZE..SEQ_NUM_SIZE + password_bytes.len()]
+            .copy_from_slice(password_bytes);
+
+        let timestamp_index = SEQ_NUM_SIZE + PASSWORD_SIZE;
+        message[timestamp_index..timestamp_index + TIMESTAMP_SIZE].copy_from_slice(&self.timestamp.to_le_bytes());
+
+        return message;
+    }
+}
+
+fn packet_from_u8_array(bytes: &[u8]) -> Result<Packet, Box<dyn Error>> {
+    if bytes.len() != MESSAGE_SIZE {
+        return Err("invalid byte array size")?;
+    }
+
+    let seq_num = match bytes[0..SEQ_NUM_SIZE].try_into() {
+        Ok(x) => u64::from_le_bytes(x),
+        Err(err) => {
+            Err(format!("failed to get sequence number - {}", err))?
+        }
+    };
+
+    let password_start = SEQ_NUM_SIZE;
+    let password_end = password_start + PASSWORD_SIZE;
+    let password_bytes = &bytes[password_start..password_end];
+    let password = String::from_utf8_lossy(password_bytes)
+        .trim_end_matches(char::from(0))
+        .to_string();
+
+    let timestamp_start = password_end;
+    let timestamp_end = timestamp_start + TIMESTAMP_SIZE;
+    let timestamp = match bytes[timestamp_start..timestamp_end].try_into() {
+        Ok(x) => u128::from_le_bytes(x),
+        Err(err) => {
+            Err(format!("failed to parse timestamp - {}", err))?
+        }
+    };
+
+    Ok(Packet {
+        seq_num: seq_num,
+        password: password,
+        timestamp: timestamp,
+    })
+}
+
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Argv::parse();
@@ -38,20 +112,15 @@ fn client(password: &String) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     let target = "127.0.0.1:55101";
 
-    if password.len() != PASSWORD_LENGTH {
-        return Err(format!("password must be exactly {} characters long.", PASSWORD_LENGTH).into());
+    if password.len() != PASSWORD_SIZE {
+        Err(format!("password must be exactly {PASSWORD_SIZE} characters long."))?
     }
 
     loop {
-        let bytes = seq_num.to_le_bytes();
-        let password_bytes = password.as_bytes();
+        let packet = Packet::new(seq_num, password.clone())?;
+        let message = packet.to_u8_array();
 
-        let mut message = [0u8;32];
-
-        message[0..8].clone_from_slice(&bytes);
-        message[8..(8 + PASSWORD_LENGTH)].clone_from_slice(password_bytes);
-
-        socket.send_to(&message, target)?;
+        socket.send_to(&message[..], target)?;
         println!("UDP sent to: {}, password: {}", target, password);
 
         sleep(Duration::from_millis(500));
@@ -61,13 +130,24 @@ fn client(password: &String) -> Result<(), Box<dyn Error>> {
 }
 
 fn server() -> Result<(), Box<dyn Error>> {
-    let password: String = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(PASSWORD_LENGTH)
-        .map(char::from)
-        .collect();
+    let password = match env::var("PLIKE_PASSWORD") {
+        Ok(x) => {
+            if x.len() != PASSWORD_SIZE {
+                Err(format!("password from environment variable is the wrong size (should be {})",
+                            PASSWORD_SIZE))?
+            }
+            x
+        },
+        Err(_) => {
+            thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(PASSWORD_SIZE)
+                .map(char::from)
+                .collect()
+        }
+    };
 
-    eprintln!("generated password is: {}", password);
+    eprintln!("password is: {}", password);
 
     let mut buf = [0; 65507];
 
@@ -78,40 +158,27 @@ fn server() -> Result<(), Box<dyn Error>> {
 
     loop {
         let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)?;
-        let filled_buf = &buf[..number_of_bytes];
 
-        if filled_buf.len() < 8 + PASSWORD_LENGTH {
-            eprintln!("received data is too short");
-            continue;
-        }
-
-        let received_password = String::from_utf8_lossy(&filled_buf[8..(8 + PASSWORD_LENGTH)]);
-
-        if received_password != password {
-            eprintln!("password does not match: {}", received_password);
-            continue;
-        }
-
-        // let seq_num = filled_buf[0..8].try_into().unwrap_or_else(|err| {
-        //     eprintln!(format!("failed to get sequence number - {}", err));
-        // });
-
-        let seq_num :[u8;8] = match filled_buf[0..8].try_into() {
+        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
             Ok(x) => x,
             Err(err) => {
-                eprintln!("failed to get sequence number - {}", err);
+                eprintln!("failed to parse packet from u8 array - {}", err);
                 continue;
             }
         };
 
-        let seq_num = u64::from_le_bytes(seq_num);
-
-        if seq_num > last_seq_num && seq_num - last_seq_num > 3 {
-            eprintln!("seq_num difference is greater than 3 ({}) - possible packet loss",
-                     seq_num - last_seq_num);
+        if packet.password != password {
+            eprintln!("packet from {}, password incorrect >:(", src_addr);
+            continue;
         }
 
-        last_seq_num = seq_num;
+        eprintln!("packet received");
+
+        if packet.seq_num > last_seq_num && packet.seq_num - last_seq_num > 3 {
+            eprintln!("seq_num difference is greater than 3 ({}) - possible packet loss",
+                      packet.seq_num - last_seq_num);
+        }
+
+        last_seq_num = packet.seq_num;
     }
 }
-
