@@ -1,6 +1,6 @@
-use std::{time::Duration, thread::sleep, error::Error, env};
+use std::{error::Error, env, thread::sleep, io};
 use std::net::UdpSocket;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 use clap::{Parser, Subcommand};
 use rand::{thread_rng, Rng};
@@ -80,7 +80,6 @@ fn packet_from_u8_array(bytes: &[u8]) -> Result<Packet, Box<dyn Error>> {
     })
 }
 
-
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Argv::parse();
 
@@ -107,25 +106,57 @@ enum Commands {
 }
 
 // TODO: configure random data in the message = seq# + password + rand_data
+// TODO: We need timestamps in log messages (println and eprintln)
 fn client(password: &String) -> Result<(), Box<dyn Error>> {
-    let mut seq_num: u64 = 0;
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    let target = "127.0.0.1:55101";
-
     if password.len() != PASSWORD_SIZE {
         Err(format!("password must be exactly {PASSWORD_SIZE} characters long."))?
     }
+
+    let mut seq_num: u64 = 0;
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    let target = "127.0.0.1:55101";
+    let mut buf = [0; 65507];
+
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
 
     loop {
         let packet = Packet::new(seq_num, password.clone())?;
         let message = packet.to_u8_array();
 
         socket.send_to(&message[..], target)?;
-        println!("UDP sent to: {}, password: {}", target, password);
+        // TODO: Only create this log message for verbose mode
+        println!("UDP sent to: {}, seq_num: {}", target, seq_num);
 
+        let current_seq_num = seq_num;
+        seq_num += 1;
+
+        let number_of_bytes = match socket.recv(&mut buf) {
+            Ok(x) => x,
+            Err(err) => {
+                if err.kind() == io::ErrorKind::TimedOut {
+                    eprintln!("timed-out 🥺 waiting for response to: {}", current_seq_num);
+                    continue;
+                }
+                return Err(err)?;
+            }
+        };
+
+        eprintln!("response packet received from server");
+        // TODO: Dynamic sleep interval
         sleep(Duration::from_millis(500));
 
-        seq_num += 1;
+        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
+            Ok(x) => x,
+            Err(err) => {
+                eprintln!("failed to parse packet from u8 array - {}", err);
+                continue;
+            }
+        };
+
+        if packet.seq_num > current_seq_num && packet.seq_num - current_seq_num > 3 {
+            eprintln!("seq_num difference is greater than 3 ({}) - possible packet loss",
+                      packet.seq_num - current_seq_num);
+        }
     }
 }
 
@@ -180,5 +211,7 @@ fn server() -> Result<(), Box<dyn Error>> {
         }
 
         last_seq_num = packet.seq_num;
+
+        socket.send_to(&packet.to_u8_array(), src_addr)?;
     }
 }
