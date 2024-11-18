@@ -2,7 +2,8 @@ use std::{error::Error, env, thread::sleep, io};
 use std::net::UdpSocket;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
-use clap::{Parser, Subcommand};
+use chrono::Local;
+use clap::{Args, Parser, Subcommand};
 use rand::{thread_rng, Rng};
 use rand::distr::Alphanumeric;
 
@@ -10,6 +11,186 @@ const SEQ_NUM_SIZE: usize = 8;
 const PASSWORD_SIZE: usize = 32;
 const TIMESTAMP_SIZE: usize = 16;
 const MESSAGE_SIZE: usize = SEQ_NUM_SIZE + PASSWORD_SIZE + TIMESTAMP_SIZE;
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Argv {
+    #[command(subcommand)]
+    command: Commands
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Client(ClientArgs),
+    Server(ServerArgs),
+}
+
+#[derive(Args)]
+struct ServerArgs {
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(Args)]
+struct ClientArgs {
+    #[arg(short, long)]
+    password: String,
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S";
+
+fn log(message: &str) {
+    let timestamp = Local::now().format(TIMESTAMP_FORMAT);
+    eprintln!("{} {}", timestamp, message);
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Argv::parse();
+
+    match &args.command {
+        Commands::Client(args) => client(args),
+        Commands::Server(args) => server(args)
+    }
+}
+
+// TODO: configure random data in the message = seq# + password + rand_data
+fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
+    if args.password.len() != PASSWORD_SIZE {
+        Err(format!("password must be exactly {PASSWORD_SIZE} characters long."))?
+    }
+
+    let mut seq_num: u64 = 0;
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    let target = "127.0.0.1:55101";
+    let mut buf = [0; 65507];
+
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+
+    loop {
+        let packet = Packet::new(seq_num, args.password.clone())?;
+        let message = packet.to_u8_array();
+
+        if seq_num == 0 {
+            log("Attempting to send packet to server...");
+        }
+        socket.send_to(&message[..], target)?;
+
+        if args.verbose {
+            log(&format!("UDP packet sent to: {}, seq_num: {}", target, seq_num));
+        }
+
+        let current_seq_num = seq_num;
+        seq_num += 1;
+
+        let number_of_bytes = match socket.recv(&mut buf) {
+            Ok(x) => x,
+            Err(err) => {
+                if err.kind() == io::ErrorKind::TimedOut {
+                    log(&format!("timed-out 🥺 waiting for response to: {}", current_seq_num));
+                    continue;
+                }
+                return Err(err)?;
+            }
+        };
+
+        if args.verbose {
+            log(&format!("Received packet seq_num: {}", packet.seq_num));
+        }
+
+        if seq_num == 1 {
+            log("Server response received.");
+        }
+
+        // log_err(&format!("response packet received from server");
+        // TODO: Dynamic sleep interval
+        sleep(Duration::from_millis(500));
+
+        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
+            Ok(x) => x,
+            Err(err) => {
+                log(&format!("failed to parse packet from u8 array - {}", err));
+                continue;
+            }
+        };
+
+        if packet.seq_num > current_seq_num && packet.seq_num - current_seq_num > 3 {
+            log(&format!("seq_num difference is greater than 3 ({}) - possible packet loss",
+                         packet.seq_num - current_seq_num));
+        }
+    }
+}
+
+// TODO: Consider the idea of supporting multiple clients
+fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
+    let password = match env::var("PLIKE_PASSWORD") {
+        Ok(x) => {
+            if x.len() != PASSWORD_SIZE {
+                Err(format!("password from environment variable is the wrong size (should be {})",
+                            PASSWORD_SIZE))?
+            }
+            x
+        },
+        Err(_) => {
+            thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(PASSWORD_SIZE)
+                .map(char::from)
+                .collect()
+        }
+    };
+
+    log(&format!("password is: {}", password));
+
+    let mut buf = [0; 65507];
+
+    let socket = UdpSocket::bind("0.0.0.0:55101")?;
+    log(&format!("Listening on {} for connections...", socket.local_addr()?));
+
+    let mut last_seq_num: u64 = 0;
+    let mut connected_printed = false;
+
+    loop {
+        let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)?;
+
+        if connected_printed == false {
+            // TODO: Timeout for server waiting for client
+            log(&format!("Client connected: {}", src_addr));
+            connected_printed = true;
+        }
+
+        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
+            Ok(x) => x,
+            Err(err) => {
+                log(&format!("failed to parse packet from u8 array - {}", err));
+                continue;
+            }
+        };
+
+        if packet.password != password {
+            log(&format!("packet from {}, password incorrect >:(", src_addr));
+            continue;
+        }
+
+        if args.verbose {
+            log(&format!("Received packet from: {}, seq_num: {}", src_addr, packet.seq_num));
+        }
+
+        if packet.seq_num > last_seq_num && packet.seq_num - last_seq_num > 3 {
+            log(&format!("seq_num difference is greater than 3 ({}) - possible packet loss",
+                         packet.seq_num - last_seq_num));
+        }
+
+        last_seq_num = packet.seq_num;
+
+        socket.send_to(&packet.to_u8_array(), src_addr)?;
+
+        if args.verbose {
+            log(&format!("UDP packet sent to: {}, seq_num: {}", src_addr, packet.seq_num));
+        }
+    }
+}
 
 struct Packet {
     seq_num: u64,
@@ -78,140 +259,4 @@ fn packet_from_u8_array(bytes: &[u8]) -> Result<Packet, Box<dyn Error>> {
         password: password,
         timestamp: timestamp,
     })
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let args = Argv::parse();
-
-    match &args.command {
-        Commands::Client {password} => client(password),
-        Commands::Server => server()
-    }
-}
-
-#[derive(Parser)]
-#[command(version, about)]
-struct Argv {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Client {
-        #[arg(short, long)]
-        password: String,
-    },
-    Server,
-}
-
-// TODO: configure random data in the message = seq# + password + rand_data
-// TODO: We need timestamps in log messages (println and eprintln)
-fn client(password: &String) -> Result<(), Box<dyn Error>> {
-    if password.len() != PASSWORD_SIZE {
-        Err(format!("password must be exactly {PASSWORD_SIZE} characters long."))?
-    }
-
-    let mut seq_num: u64 = 0;
-    let socket = UdpSocket::bind("0.0.0.0:0")?;
-    let target = "127.0.0.1:55101";
-    let mut buf = [0; 65507];
-
-    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
-
-    loop {
-        let packet = Packet::new(seq_num, password.clone())?;
-        let message = packet.to_u8_array();
-
-        socket.send_to(&message[..], target)?;
-        // TODO: Only create this log message for verbose mode
-        println!("UDP sent to: {}, seq_num: {}", target, seq_num);
-
-        let current_seq_num = seq_num;
-        seq_num += 1;
-
-        let number_of_bytes = match socket.recv(&mut buf) {
-            Ok(x) => x,
-            Err(err) => {
-                if err.kind() == io::ErrorKind::TimedOut {
-                    eprintln!("timed-out 🥺 waiting for response to: {}", current_seq_num);
-                    continue;
-                }
-                return Err(err)?;
-            }
-        };
-
-        eprintln!("response packet received from server");
-        // TODO: Dynamic sleep interval
-        sleep(Duration::from_millis(500));
-
-        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
-            Ok(x) => x,
-            Err(err) => {
-                eprintln!("failed to parse packet from u8 array - {}", err);
-                continue;
-            }
-        };
-
-        if packet.seq_num > current_seq_num && packet.seq_num - current_seq_num > 3 {
-            eprintln!("seq_num difference is greater than 3 ({}) - possible packet loss",
-                      packet.seq_num - current_seq_num);
-        }
-    }
-}
-
-fn server() -> Result<(), Box<dyn Error>> {
-    let password = match env::var("PLIKE_PASSWORD") {
-        Ok(x) => {
-            if x.len() != PASSWORD_SIZE {
-                Err(format!("password from environment variable is the wrong size (should be {})",
-                            PASSWORD_SIZE))?
-            }
-            x
-        },
-        Err(_) => {
-            thread_rng()
-                .sample_iter(&Alphanumeric)
-                .take(PASSWORD_SIZE)
-                .map(char::from)
-                .collect()
-        }
-    };
-
-    eprintln!("password is: {}", password);
-
-    let mut buf = [0; 65507];
-
-    let socket = UdpSocket::bind("0.0.0.0:55101")?;
-    eprintln!("listening on {}...", socket.local_addr()?);
-
-    let mut last_seq_num: u64 = 0;
-
-    loop {
-        let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)?;
-
-        let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
-            Ok(x) => x,
-            Err(err) => {
-                eprintln!("failed to parse packet from u8 array - {}", err);
-                continue;
-            }
-        };
-
-        if packet.password != password {
-            eprintln!("packet from {}, password incorrect >:(", src_addr);
-            continue;
-        }
-
-        eprintln!("packet received");
-
-        if packet.seq_num > last_seq_num && packet.seq_num - last_seq_num > 3 {
-            eprintln!("seq_num difference is greater than 3 ({}) - possible packet loss",
-                      packet.seq_num - last_seq_num);
-        }
-
-        last_seq_num = packet.seq_num;
-
-        socket.send_to(&packet.to_u8_array(), src_addr)?;
-    }
 }
