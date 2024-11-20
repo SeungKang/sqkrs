@@ -1,5 +1,6 @@
 use std::{error::Error, env, thread::sleep, io};
-use std::net::UdpSocket;
+use std::collections::HashMap;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 use chrono::Local;
@@ -37,6 +38,7 @@ struct ClientArgs {
     password: String,
     #[arg(short, long)]
     verbose: bool,
+    address: String,
 }
 
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S";
@@ -63,9 +65,9 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
     let mut seq_num: u64 = 0;
     let socket = UdpSocket::bind("0.0.0.0:0")?;
-    let target = "127.0.0.1:55101";
     let mut buf = [0; 65507];
 
+    // TODO: Support adjustable timeout or scaling
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
 
     loop {
@@ -75,10 +77,15 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
         if seq_num == 0 {
             log("Attempting to send packet to server...");
         }
-        socket.send_to(&message[..], target)?;
+        socket.send_to(&message[..], &args.address)?;
+
+        let sent_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis();
 
         if args.verbose {
-            log(&format!("UDP packet sent to: {}, seq_num: {}", target, seq_num));
+            log(&format!("UDP packet sent to: {}, seq_num: {}",
+                         &args.address, seq_num));
         }
 
         let current_seq_num = seq_num;
@@ -95,8 +102,13 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         };
 
+        let recv_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis();
+
         if args.verbose {
-            log(&format!("Received packet seq_num: {}", packet.seq_num));
+            let diff = recv_time as i128 - sent_time as i128;
+            log(&format!("Received packet seq_num: {}, time: {}", packet.seq_num, diff));
         }
 
         if seq_num == 1 {
@@ -148,17 +160,11 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:55101")?;
     log(&format!("Listening on {} for connections...", socket.local_addr()?));
 
-    let mut last_seq_num: u64 = 0;
-    let mut connected_printed = false;
+    // TODO: Remove idle clients after some time
+    let mut clients: HashMap<SocketAddr,ClientState> = HashMap::new();
 
     loop {
         let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)?;
-
-        if connected_printed == false {
-            // TODO: Timeout for server waiting for client
-            log(&format!("Client connected: {}", src_addr));
-            connected_printed = true;
-        }
 
         let packet =  match packet_from_u8_array(&buf[..number_of_bytes]) {
             Ok(x) => x,
@@ -173,23 +179,49 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             continue;
         }
 
+        socket.send_to(&packet.to_u8_array(), src_addr)?;
+
+        let mut is_first_packet = false;
+
+        let mut state: &mut ClientState = match clients.get_mut(&src_addr) {
+            Some(x) => x,
+            None => {
+                clients.insert(src_addr, ClientState {
+                    addr: src_addr,
+                    last_packet: packet,
+                });
+
+                log(&format!("Client connected: {}", src_addr));
+
+                continue
+            }
+        };
+
         if args.verbose {
             log(&format!("Received packet from: {}, seq_num: {}", src_addr, packet.seq_num));
         }
 
-        if packet.seq_num > last_seq_num && packet.seq_num - last_seq_num > 3 {
-            log(&format!("seq_num difference is greater than 3 ({}) - possible packet loss",
-                         packet.seq_num - last_seq_num));
+        if is_first_packet {
+            continue
         }
 
-        last_seq_num = packet.seq_num;
+        if packet.seq_num > state.last_packet.seq_num && packet.seq_num - state.last_packet.seq_num > 3 {
+            log(&format!("seq_num difference is greater than 3 ({}) - possible packet loss",
+                         packet.seq_num - state.last_packet.seq_num));
+        }
 
-        socket.send_to(&packet.to_u8_array(), src_addr)?;
+        state.last_packet = packet;
 
         if args.verbose {
-            log(&format!("UDP packet sent to: {}, seq_num: {}", src_addr, packet.seq_num));
+            log(&format!("UDP packet sent to: {}, seq_num: {}",
+                         src_addr, state.last_packet.seq_num));
         }
     }
+}
+
+struct ClientState {
+    addr: SocketAddr,
+    last_packet: Packet,
 }
 
 struct Packet {
