@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, error::Error, io, thread, thread::sleep};
 
-use chrono::Local;
+use chrono::{Utc};
 use clap::{Args, Parser, Subcommand};
 use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
@@ -45,17 +45,28 @@ struct ClientArgs {
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S";
 
 fn log(message: &str) {
-    let timestamp = Local::now().format(TIMESTAMP_FORMAT);
+    let timestamp = Utc::now().format(TIMESTAMP_FORMAT);
     eprintln!("{} {}", timestamp, message);
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if let Err(err) = main_with_error() {
+        log(&format!("An error occurred: {}", err));
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn main_with_error() -> Result<(), Box<dyn Error>> {
     let args = Argv::parse();
 
     match &args.command {
         Commands::Client(args) => client(args),
         Commands::Server(args) => server(args),
-    }
+    }?;
+
+    Ok(())
 }
 
 // TODO: configure random data in the message = seq# + password + rand_data
