@@ -8,11 +8,22 @@ use chrono::{Utc};
 use clap::{Args, Parser, Subcommand};
 use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
+use sha2::Sha256;
+use hmac::{Hmac, Mac};
 
 const SEQ_NUM_SIZE: usize = 8;
-const PASSWORD_SIZE: usize = 32;
+const SEQ_NUM_START: usize = 0;
+const SEQ_NUM_END: usize = SEQ_NUM_START + SEQ_NUM_SIZE;
+
 const TIMESTAMP_SIZE: usize = 16;
-const MESSAGE_SIZE: usize = SEQ_NUM_SIZE + PASSWORD_SIZE + TIMESTAMP_SIZE;
+const TIMESTAMP_START: usize = SEQ_NUM_SIZE;
+const TIMESTAMP_END: usize = TIMESTAMP_START + TIMESTAMP_SIZE;
+
+const MAC_SIZE: usize = 32;
+const MAC_START: usize = MESSAGE_SIZE - MAC_SIZE;
+const MAC_END: usize = MAC_START + MAC_SIZE;
+
+const MESSAGE_SIZE: usize = SEQ_NUM_SIZE + TIMESTAMP_SIZE + MAC_SIZE;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -41,6 +52,8 @@ struct ClientArgs {
     verbose: bool,
     address: String,
 }
+
+type HmacSha256 = Hmac<Sha256>;
 
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S";
 
@@ -71,12 +84,6 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 
 // TODO: configure random data in the message = seq# + password + rand_data
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
-    if args.password.len() != PASSWORD_SIZE {
-        Err(format!(
-            "password must be exactly {PASSWORD_SIZE} characters long."
-        ))?
-    }
-
     let mut seq_num: u64 = 0;
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     let mut buf = [0; 65507];
@@ -85,8 +92,9 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
 
     loop {
-        let packet = Packet::new(seq_num, args.password.clone())?;
-        let message = packet.to_u8_array();
+        let packet = Packet::new(seq_num)?;
+        let message = packet.to_u8_array(&args.password)
+            .map_err(|err| format!("failed to turn packet to u8 array - {err}"))?;
 
         if seq_num == 0 {
             log("Attempting to send packet to server...");
@@ -123,7 +131,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
         let recv_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         if seq_num == 1 {
-            log("Server response received.");
+            log("Server response received");
         }
 
         let diff = recv_time as i128 - sent_time as i128;
@@ -141,8 +149,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             sleep(Duration::from_millis((500 - diff) as u64));
         }
 
-
-        let packet = match packet_from_u8_array(&buf[..number_of_bytes]) {
+        let packet = match packet_from_u8_array(&buf[..number_of_bytes], &args.password) {
             Ok(x) => x,
             Err(err) => {
                 log(&format!("failed to parse packet from u8 array - {}", err));
@@ -159,21 +166,17 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     }
 }
 
-// TODO: Consider the idea of supporting multiple clients
 fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let password = match env::var("PLIKE_PASSWORD") {
         Ok(x) => {
-            if x.len() != PASSWORD_SIZE {
-                Err(format!(
-                    "password from environment variable is the wrong size (should be {})",
-                    PASSWORD_SIZE
-                ))?
+            if x.len() == 0 {
+                Err("password from environment variable is empty")?
             }
             x
         }
         Err(_) => thread_rng()
             .sample_iter(&Alphanumeric)
-            .take(PASSWORD_SIZE)
+            .take(32)
             .map(char::from)
             .collect(),
     };
@@ -197,18 +200,13 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     loop {
         let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)?;
 
-        let packet = match packet_from_u8_array(&buf[..number_of_bytes]) {
+        let packet = match packet_from_u8_array(&buf[..number_of_bytes], &password) {
             Ok(x) => x,
             Err(err) => {
                 log(&format!("failed to parse packet from u8 array - {}", err));
                 continue;
             }
         };
-
-        if packet.password != password {
-            log(&format!("packet from {}, password incorrect >:(", src_addr));
-            continue;
-        }
 
         if args.verbose {
             log(&format!(
@@ -219,7 +217,10 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         let packet_time = Instant::now();
 
-        socket.send_to(&packet.to_u8_array(), src_addr)?;
+        let message = packet.to_u8_array(&password)
+            .map_err(|err| format!("failed to turn packet to u8 array - {err}"))?;
+
+        socket.send_to(&message[..], src_addr)?;
 
         if args.verbose {
             log(&format!(
@@ -285,63 +286,63 @@ struct ClientState {
 #[derive(Clone)]
 struct Packet {
     seq_num: u64,
-    password: String,
     timestamp: u128,
 }
 
 impl Packet {
-    fn new(seq_num: u64, password: String) -> Result<Self, Box<dyn Error>> {
+    fn new(seq_num: u64) -> Result<Self, Box<dyn Error>> {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         Ok(Self {
             seq_num: seq_num,
-            password: password,
             timestamp: timestamp,
         })
     }
 
-    fn to_u8_array(&self) -> [u8; MESSAGE_SIZE] {
+    fn to_u8_array(&self, password: &str) -> Result<[u8; MESSAGE_SIZE], Box<dyn Error>> {
         let mut message = [0u8; MESSAGE_SIZE];
+
         message[0..SEQ_NUM_SIZE].copy_from_slice(&self.seq_num.to_le_bytes());
 
-        let password_bytes = self.password.as_bytes();
-        message[SEQ_NUM_SIZE..SEQ_NUM_SIZE + password_bytes.len()].copy_from_slice(password_bytes);
-
-        let timestamp_index = SEQ_NUM_SIZE + PASSWORD_SIZE;
-        message[timestamp_index..timestamp_index + TIMESTAMP_SIZE]
+        message[TIMESTAMP_START..TIMESTAMP_END]
             .copy_from_slice(&self.timestamp.to_le_bytes());
 
-        return message;
+        let mut mac = HmacSha256::new_from_slice(password.as_bytes())
+            .map_err(|err| format!("failed to create mac - {err}"))?;
+
+        mac.update(&message[..MAC_START]);
+        message[MAC_START..MAC_END].copy_from_slice(&mac.finalize().into_bytes()[..]);
+
+        Ok(message)
     }
 }
 
-fn packet_from_u8_array(bytes: &[u8]) -> Result<Packet, Box<dyn Error>> {
+fn packet_from_u8_array(bytes: &[u8], password: &str) -> Result<Packet, Box<dyn Error>> {
     if bytes.len() != MESSAGE_SIZE {
         return Err("invalid byte array size")?;
     }
+
+    let received_mac = &bytes[MAC_START..MAC_END];
+    let mut mac = HmacSha256::new_from_slice(password.as_bytes())
+        .map_err(|err| format!("failed to create mac - {err}"))?;
+
+    mac.update(&bytes[..MAC_START]);
+
+    mac.verify_slice(&received_mac)
+        .map_err(|err| format!("failed to verify mac slice - {err}"))?;
 
     let seq_num = match bytes[0..SEQ_NUM_SIZE].try_into() {
         Ok(x) => u64::from_le_bytes(x),
         Err(err) => Err(format!("failed to get sequence number - {}", err))?,
     };
 
-    let password_start = SEQ_NUM_SIZE;
-    let password_end = password_start + PASSWORD_SIZE;
-    let password_bytes = &bytes[password_start..password_end];
-    let password = String::from_utf8_lossy(password_bytes)
-        .trim_end_matches(char::from(0))
-        .to_string();
-
-    let timestamp_start = password_end;
-    let timestamp_end = timestamp_start + TIMESTAMP_SIZE;
-    let timestamp = match bytes[timestamp_start..timestamp_end].try_into() {
+    let timestamp = match bytes[TIMESTAMP_START..TIMESTAMP_END].try_into() {
         Ok(x) => u128::from_le_bytes(x),
         Err(err) => Err(format!("failed to parse timestamp - {}", err))?,
     };
 
     Ok(Packet {
         seq_num: seq_num,
-        password: password,
         timestamp: timestamp,
     })
 }
