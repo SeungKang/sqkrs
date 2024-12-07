@@ -42,6 +42,8 @@ enum Commands {
 struct ServerArgs {
     #[arg(short, long)]
     verbose: bool,
+    #[arg(short, long, default_value = "0.0.0.0:55101")]
+    bind: String,
 }
 
 #[derive(Args)]
@@ -123,11 +125,16 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             Err(err) => {
                 if err.kind() == io::ErrorKind::TimedOut {
                     log(&format!(
-                        "timed-out 🥺 waiting for response to: {}",
-                        current_seq_num
+                        "timed-out 🥺 waiting for response to: {current_seq_num}"
+                    ));
+                    continue;
+                } else if let Some(libc::EAGAIN) = err.raw_os_error() {
+                    log(&format!(
+                        "got EAGAIN when waiting for response message ({err}): {current_seq_num}"
                     ));
                     continue;
                 }
+
                 return Err(format!("socket receive failed while waiting for response message - {err}"))?;
             }
         };
