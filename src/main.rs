@@ -64,7 +64,7 @@ fn log(message: &str) {
 
 fn main() -> Result<(), Box<dyn Error>> {
     if let Err(err) = main_with_error() {
-        log(&format!("Fatal: {}", err));
+        log(&format!("fatal: {}", err));
         return Err(err);
     }
 
@@ -93,7 +93,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     socket.set_read_timeout(Some(Duration::from_millis(100)))
         .map_err(|err|format!("failed to set the read timeout of socket - {err}"))?;
 
-    log("Attempting to send initial packet to server...");
+    log("attempting to send initial packet to server...");
 
     loop {
         let packet = Packet::new(seq_num)
@@ -136,14 +136,14 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             .map_err(|err|format!("failed to get duration since UTC - {err}"))?.as_millis();
 
         if seq_num == 1 {
-            log("Server response received");
+            log("server response received");
         }
 
         let diff = recv_time as i128 - sent_time as i128;
 
         if args.verbose {
             log(&format!(
-                "Received packet seq_num: {}, time: {}",
+                "received packet seq_num: {}, time: {}",
                 packet.seq_num, diff
             ));
         }
@@ -196,7 +196,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let local_addr = socket.local_addr()
         .map_err(|err| format!("failed to get local address - {err}"))?;
     log(&format!(
-        "Listening on {} for connections...",
+        "listening on {} for connections...",
         local_addr
     ));
 
@@ -220,7 +220,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "Received packet from: {}, seq_num: {}",
+                "received packet from: {}, seq_num: {}",
                 src_addr, packet.seq_num
             ));
         }
@@ -266,7 +266,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
                     },
                 );
 
-                log(&format!("Client connected: {}", src_addr));
+                log(&format!("client connected: {}", src_addr));
             }
         }
     }
@@ -279,7 +279,7 @@ fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
         // clients gets unlocked at the end of this statement
         clients.lock().unwrap().retain(|addr, state| {
             if Instant::now().duration_since(state.last_packet_time) > Duration::new(60, 0) {
-                log(&format!("Removing idle client: {}", addr));
+                log(&format!("removing idle client: {}", addr));
                 false
             } else {
                 true
