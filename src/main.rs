@@ -197,7 +197,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
     let mut buf = [0; 65507];
 
-    let socket = UdpSocket::bind("0.0.0.0:55101")
+    let socket = UdpSocket::bind(args.bind.clone())
         .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
 
     let local_addr = socket.local_addr()
