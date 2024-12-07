@@ -55,7 +55,7 @@ struct ClientArgs {
 
 type HmacSha256 = Hmac<Sha256>;
 
-const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S";
+const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%SZ";
 
 fn log(message: &str) {
     let timestamp = Utc::now().format(TIMESTAMP_FORMAT);
