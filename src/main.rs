@@ -86,7 +86,6 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 
 // TODO: configure random data in the message = seq# + password + rand_data
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
-    let mut seq_num: u64 = 0;
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
     let mut buf = [0; 65507];
@@ -97,7 +96,21 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
     log("attempting to send initial packet to server...");
 
+    let mut seq_num: u64 = 0;
+    let mut current_packet_loss_state = false;
+    let mut last_packet_loss_state = false;
+    let mut last_recv_seq_num = seq_num;
+
     loop {
+        if current_packet_loss_state != last_packet_loss_state {
+            last_packet_loss_state = current_packet_loss_state;
+            if current_packet_loss_state {
+                log("losing packets >:(");
+            } else {
+                log("no longer losing packets :)");
+            }
+        }
+
         let packet = Packet::new(seq_num)
             .map_err(|err|format!("failed to create new packet - {err}"))?;
 
@@ -117,21 +130,26 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             ));
         }
 
-        let current_seq_num = seq_num;
         seq_num += 1;
 
         let number_of_bytes = match socket.recv(&mut buf) {
             Ok(x) => x,
             Err(err) => {
+                current_packet_loss_state = true;
+
                 if err.kind() == io::ErrorKind::TimedOut {
-                    log(&format!(
-                        "timed-out 🥺 waiting for response to: {current_seq_num}"
-                    ));
+                    if args.verbose {
+                        log(&format!(
+                            "timed-out 🥺 waiting for response to: {seq_num}"
+                        ));
+                    }
                     continue;
                 } else if let Some(libc::EAGAIN) = err.raw_os_error() {
-                    log(&format!(
-                        "got EAGAIN when waiting for response message ({err}): {current_seq_num}"
-                    ));
+                    if args.verbose {
+                        log(&format!(
+                            "got EAGAIN when waiting for response message ({err}): {seq_num}"
+                        ));
+                    }
                     continue;
                 }
 
@@ -139,12 +157,10 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         };
 
+        current_packet_loss_state = false;
+
         let recv_time = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|err|format!("failed to get duration since UTC - {err}"))?.as_millis();
-
-        if seq_num == 1 {
-            log("server response received");
-        }
 
         let diff = recv_time as i128 - sent_time as i128;
 
@@ -161,7 +177,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             sleep(Duration::from_millis((500 - diff) as u64));
         }
 
-        let packet = match packet_from_u8_array(&buf[..number_of_bytes], &args.password) {
+        let response = match packet_from_u8_array(&buf[..number_of_bytes], &args.password) {
             Ok(x) => x,
             Err(err) => {
                 log(&format!("failed to parse packet from u8 array - {}", err));
@@ -169,12 +185,18 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         };
 
-        if packet.seq_num > current_seq_num && packet.seq_num - current_seq_num > 3 {
+        if response.seq_num == 0 {
+            log("received initial server response");
+        }
+
+        if response.seq_num > last_recv_seq_num && response.seq_num - last_recv_seq_num > 3 {
             log(&format!(
                 "seq_num difference is greater than 3 ({}) - possible packet loss",
-                packet.seq_num - current_seq_num
+                response.seq_num - last_recv_seq_num
             ));
         }
+
+        last_recv_seq_num = response.seq_num;
     }
 }
 
