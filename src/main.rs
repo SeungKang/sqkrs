@@ -252,9 +252,6 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             let mut clients = clients.lock().unwrap();
 
             if let Some(state) = clients.get_mut(&src_addr) {
-                state.last_packet = packet.clone();
-                state.last_packet_time = packet_time;
-
                 if packet.seq_num > state.last_packet.seq_num
                     && packet.seq_num - state.last_packet.seq_num > 3
                 {
@@ -263,6 +260,9 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
                         packet.seq_num - state.last_packet.seq_num
                     ));
                 }
+
+                state.last_packet = packet.clone();
+                state.last_packet_time = packet_time;
             } else {
                 clients.insert(
                     src_addr,
