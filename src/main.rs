@@ -301,13 +301,14 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     }
 }
 
+// TODO: make this customizable
 fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
     loop {
         sleep(Duration::from_secs(5));
 
         // clients gets unlocked at the end of this statement
         clients.lock().unwrap().retain(|addr, state| {
-            if Instant::now().duration_since(state.last_packet_time) > Duration::new(60, 0) {
+            if Instant::now().duration_since(state.last_packet_time) > Duration::new(5, 0) {
                 log(&format!("removing idle client: {}", addr));
                 false
             } else {
