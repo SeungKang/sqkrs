@@ -87,14 +87,14 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 // TODO: configure random data in the message = seq# + password + rand_data
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
+        .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
     // TODO: Support adjustable timeout or scaling
     socket
         .set_read_timeout(Some(Duration::from_millis(100)))
         .map_err(|err| format!("failed to set the read timeout of socket - {err}"))?;
 
-    log("attempting to send initial packet to server...");
+    log("attempting to send initial message to server...");
 
     let mut seq_num: u64 = 0;
     let mut current_packet_loss_state = false;
@@ -112,16 +112,16 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let packet =
-            Packet::new(seq_num).map_err(|err| format!("failed to create new packet - {err}"))?;
+        let msg =
+            Message::new(seq_num).map_err(|err| format!("failed to create new message - {err}"))?;
 
-        let message = packet
+        let message = msg
             .to_u8_array(&args.password)
-            .map_err(|err| format!("failed to turn packet into u8 array - {err}"))?;
+            .map_err(|err| format!("failed to turn message into u8 array - {err}"))?;
 
         socket
             .send_to(&message[..], &args.address)
-            .map_err(|err| format!("failed to send packet to server - {err}"))?;
+            .map_err(|err| format!("failed to send message to server - {err}"))?;
 
         let sent_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -130,14 +130,14 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "UDP packet sent to: {}, seq_num: {}",
+                "message sent to: {}, seq_num: {}",
                 &args.address, seq_num
             ));
         }
 
         seq_num += 1;
 
-        let number_of_bytes = match socket.recv(&mut buf) {
+        let (n_bytes, from_addr) = match socket.recv_from(&mut buf) {
             Ok(x) => x,
             Err(err) => {
                 current_packet_loss_state = true;
@@ -175,8 +175,8 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "received packet seq_num: {}, time: {}",
-                packet.seq_num, diff
+                "received message seq_num: {}, time: {}",
+                msg.seq_num, diff
             ));
         }
 
@@ -186,10 +186,10 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             sleep(Duration::from_millis((500 - diff) as u64));
         }
 
-        let response = match packet_from_u8_array(&buf[..number_of_bytes], &args.password) {
+        let response = match message_from_u8_array(&buf[..n_bytes], &args.password) {
             Ok(x) => x,
             Err(err) => {
-                log(&format!("failed to parse packet from u8 array - {}", err));
+                log(&format!("failed to parse message from {from_addr} - {err}"));
                 continue;
             }
         };
@@ -227,7 +227,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     log(&format!("password is: {}", password));
 
     let socket = UdpSocket::bind(args.bind.clone())
-        .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
+        .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
     let local_addr = socket
         .local_addr()
@@ -244,39 +244,39 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let mut buf = [0; 65507];
 
     loop {
-        let (number_of_bytes, src_addr) = socket
+        let (n_bytes, src_addr) = socket
             .recv_from(&mut buf)
             .map_err(|err| format!("failed to receive from socket - {err}"))?;
 
-        let packet = match packet_from_u8_array(&buf[..number_of_bytes], &password) {
+        let msg = match message_from_u8_array(&buf[..n_bytes], &password) {
             Ok(x) => x,
             Err(err) => {
-                log(&format!("failed to parse packet from u8 array - {}", err));
+                log(&format!("failed to parse message from {src_addr} - {err}"));
                 continue;
             }
         };
 
         if args.verbose {
             log(&format!(
-                "received packet from: {}, seq_num: {}",
-                src_addr, packet.seq_num
+                "received message from: {}, seq_num: {}",
+                src_addr, msg.seq_num
             ));
         }
 
-        let packet_time = Instant::now();
+        let recv_time = Instant::now();
 
-        let message = packet
+        let reply = msg
             .to_u8_array(&password)
-            .map_err(|err| format!("failed to turn packet to u8 array - {err}"))?;
+            .map_err(|err| format!("failed to turn reply into u8 array - {err}"))?;
 
         socket
-            .send_to(&message[..], src_addr)
-            .map_err(|err| format!("failed to send packet to client - {err}"))?;
+            .send_to(&reply[..], src_addr)
+            .map_err(|err| format!("failed to send reply to client - {err}"))?;
 
         if args.verbose {
             log(&format!(
-                "UDP packet sent to: {}, seq_num: {}",
-                src_addr, packet.seq_num
+                "reply sent to: {}, seq_num: {}",
+                src_addr, msg.seq_num
             ));
         }
 
@@ -285,24 +285,23 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             let mut clients = clients.lock().unwrap();
 
             if let Some(state) = clients.get_mut(&src_addr) {
-                if packet.seq_num > state.last_packet.seq_num
-                    && packet.seq_num - state.last_packet.seq_num > 3
+                if msg.seq_num > state.last_msg.seq_num && msg.seq_num - state.last_msg.seq_num > 3
                 {
                     log(&format!(
                         "seq_num difference is greater than 3 ({}) - possible packet loss",
-                        packet.seq_num - state.last_packet.seq_num
+                        msg.seq_num - state.last_msg.seq_num
                     ));
                 }
 
-                state.last_packet = packet.clone();
-                state.last_packet_time = packet_time;
+                state.last_msg = msg.clone();
+                state.last_recv_time = recv_time;
             } else {
                 clients.insert(
                     src_addr,
                     ClientState {
                         addr: src_addr,
-                        last_packet: packet.clone(),
-                        last_packet_time: packet_time,
+                        last_msg: msg.clone(),
+                        last_recv_time: recv_time,
                     },
                 );
 
@@ -319,7 +318,7 @@ fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
 
         // clients gets unlocked at the end of this statement
         clients.lock().unwrap().retain(|addr, state| {
-            if Instant::now().duration_since(state.last_packet_time) > Duration::new(5, 0) {
+            if Instant::now().duration_since(state.last_recv_time) > Duration::new(5, 0) {
                 log(&format!("removing idle client: {}", addr));
                 false
             } else {
@@ -331,17 +330,17 @@ fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
 
 struct ClientState {
     addr: SocketAddr,
-    last_packet: Packet,
-    last_packet_time: Instant,
+    last_msg: Message,
+    last_recv_time: Instant,
 }
 
 #[derive(Clone)]
-struct Packet {
+struct Message {
     seq_num: u64,
     timestamp: u128,
 }
 
-impl Packet {
+impl Message {
     fn new(seq_num: u64) -> Result<Self, Box<dyn Error>> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -371,7 +370,7 @@ impl Packet {
     }
 }
 
-fn packet_from_u8_array(bytes: &[u8], password: &str) -> Result<Packet, Box<dyn Error>> {
+fn message_from_u8_array(bytes: &[u8], password: &str) -> Result<Message, Box<dyn Error>> {
     if bytes.len() != MESSAGE_SIZE {
         return Err("invalid byte array size")?;
     }
@@ -395,7 +394,7 @@ fn packet_from_u8_array(bytes: &[u8], password: &str) -> Result<Packet, Box<dyn 
         Err(err) => Err(format!("failed to parse timestamp - {}", err))?,
     };
 
-    Ok(Packet {
+    Ok(Message {
         seq_num: seq_num,
         timestamp: timestamp,
     })
