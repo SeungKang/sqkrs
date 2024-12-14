@@ -11,6 +11,8 @@ use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
 
+const PASSWORD_ENV_NAME: &str = "PLIKE_PASSWORD";
+
 const SEQ_NUM_SIZE: usize = 8;
 const SEQ_NUM_START: usize = 0;
 const SEQ_NUM_END: usize = SEQ_NUM_START + SEQ_NUM_SIZE;
@@ -49,8 +51,6 @@ struct ServerArgs {
 #[derive(Args)]
 struct ClientArgs {
     #[arg(short, long)]
-    password: String,
-    #[arg(short, long)]
     verbose: bool,
     address: String,
 }
@@ -86,6 +86,22 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 
 // TODO: configure random data in the message = seq# + password + rand_data
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
+    let password = match env::var(PASSWORD_ENV_NAME) {
+        Ok(x) => {
+            if x.len() == 0 {
+                Err(format!(
+                    "password from {PASSWORD_ENV_NAME} environment variable is empty"
+                ))?
+            }
+            x
+        }
+        Err(_) => {
+            Err(format!(
+                "please provide a password by setting the {PASSWORD_ENV_NAME} environment variable"
+            ))
+        }?,
+    };
+
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
@@ -116,7 +132,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             Message::new(seq_num).map_err(|err| format!("failed to create new message - {err}"))?;
 
         let message = msg
-            .to_u8_array(&args.password)
+            .to_u8_array(&password)
             .map_err(|err| format!("failed to turn message into u8 array - {err}"))?;
 
         socket
@@ -178,7 +194,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             sleep(Duration::from_millis((500 - elapsed_ms) as u64));
         }
 
-        let response = match message_from_u8_array(&buf[..n_bytes], &args.password) {
+        let response = match message_from_u8_array(&buf[..n_bytes], &password) {
             Ok(x) => x,
             Err(err) => {
                 log(&format!("failed to parse message from {from_addr} - {err}"));
@@ -202,10 +218,12 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 }
 
 fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
-    let password = match env::var("PLIKE_PASSWORD") {
+    let password = match env::var(PASSWORD_ENV_NAME) {
         Ok(x) => {
             if x.len() == 0 {
-                Err("password from environment variable is empty")?
+                Err(format!(
+                    "password from {PASSWORD_ENV_NAME} environment variable is empty"
+                ))?
             }
             x
         }
