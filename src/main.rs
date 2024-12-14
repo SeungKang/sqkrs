@@ -348,7 +348,7 @@ impl Message {
     fn to_u8_array(&self, password: &str) -> Result<[u8; MESSAGE_SIZE], Box<dyn Error>> {
         let mut message = [0u8; MESSAGE_SIZE];
 
-        message[0..SEQ_NUM_SIZE].copy_from_slice(&self.seq_num.to_le_bytes());
+        message[SEQ_NUM_START..SEQ_NUM_END].copy_from_slice(&self.seq_num.to_le_bytes());
 
         message[TIMESTAMP_START..TIMESTAMP_END].copy_from_slice(&self.timestamp.to_le_bytes());
 
@@ -376,7 +376,7 @@ fn message_from_u8_array(bytes: &[u8], password: &str) -> Result<Message, Box<dy
     mac.verify_slice(&received_mac)
         .map_err(|err| format!("failed to verify mac slice - {err}"))?;
 
-    let seq_num = match bytes[0..SEQ_NUM_SIZE].try_into() {
+    let seq_num = match bytes[SEQ_NUM_START..SEQ_NUM_END].try_into() {
         Ok(x) => u64::from_le_bytes(x),
         Err(err) => Err(format!("failed to get sequence number - {}", err))?,
     };
