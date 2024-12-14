@@ -123,10 +123,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             .send_to(&message[..], &args.address)
             .map_err(|err| format!("failed to send message to server - {err}"))?;
 
-        let sent_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| format!("failed to get duration since UTC - {err}"))?
-            .as_millis();
+        let sent_at = Instant::now();
 
         if args.verbose {
             log(&format!(
@@ -166,24 +163,19 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         current_packet_loss_state = false;
 
-        let recv_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| format!("failed to get duration since UTC - {err}"))?
-            .as_millis();
-
-        let diff = recv_time as i128 - sent_time as i128;
+        let elapsed_ms = sent_at.elapsed().as_millis();
 
         if args.verbose {
             log(&format!(
-                "received message seq_num: {}, time: {}",
-                msg.seq_num, diff
+                "received message seq_num: {}, elapsed: {} ms",
+                msg.seq_num, elapsed_ms
             ));
         }
 
-        if diff > 500 {
+        if elapsed_ms > 500 {
             sleep(Duration::from_millis(500));
         } else {
-            sleep(Duration::from_millis((500 - diff) as u64));
+            sleep(Duration::from_millis((500 - elapsed_ms) as u64));
         }
 
         let response = match message_from_u8_array(&buf[..n_bytes], &args.password) {
@@ -263,7 +255,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             ));
         }
 
-        let recv_time = Instant::now();
+        let recv_at = Instant::now();
 
         let reply = msg
             .to_u8_array(&password)
@@ -294,14 +286,14 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
                 }
 
                 state.last_msg = msg.clone();
-                state.last_recv_time = recv_time;
+                state.last_recv_time = recv_at;
             } else {
                 clients.insert(
                     src_addr,
                     ClientState {
                         addr: src_addr,
                         last_msg: msg.clone(),
-                        last_recv_time: recv_time,
+                        last_recv_time: recv_at,
                     },
                 );
 
