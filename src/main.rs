@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{env, error::Error, io, thread, thread::sleep};
 
-use chrono::{Utc};
+use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
+use hmac::{Hmac, Mac};
 use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
-use hmac::{Hmac, Mac};
 
 const SEQ_NUM_SIZE: usize = 8;
 const SEQ_NUM_START: usize = 0;
@@ -88,11 +88,11 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
-    let mut buf = [0; 65507];
 
     // TODO: Support adjustable timeout or scaling
-    socket.set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(|err|format!("failed to set the read timeout of socket - {err}"))?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .map_err(|err| format!("failed to set the read timeout of socket - {err}"))?;
 
     log("attempting to send initial packet to server...");
 
@@ -100,6 +100,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let mut current_packet_loss_state = false;
     let mut last_packet_loss_state = false;
     let mut last_recv_seq_num = seq_num;
+    let mut buf = [0; 65507];
 
     loop {
         if current_packet_loss_state != last_packet_loss_state {
@@ -111,17 +112,21 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let packet = Packet::new(seq_num)
-            .map_err(|err|format!("failed to create new packet - {err}"))?;
+        let packet =
+            Packet::new(seq_num).map_err(|err| format!("failed to create new packet - {err}"))?;
 
-        let message = packet.to_u8_array(&args.password)
+        let message = packet
+            .to_u8_array(&args.password)
             .map_err(|err| format!("failed to turn packet into u8 array - {err}"))?;
 
-        socket.send_to(&message[..], &args.address)
+        socket
+            .send_to(&message[..], &args.address)
             .map_err(|err| format!("failed to send packet to server - {err}"))?;
 
-        let sent_time = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|err|format!("failed to get duration since UTC - {err}"))?.as_millis();
+        let sent_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to get duration since UTC - {err}"))?
+            .as_millis();
 
         if args.verbose {
             log(&format!(
@@ -139,10 +144,9 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
                 if err.kind() == io::ErrorKind::TimedOut {
                     if args.verbose {
-                        log(&format!(
-                            "timed-out 🥺 waiting for response to: {seq_num}"
-                        ));
+                        log(&format!("timed-out 🥺 waiting for response to: {seq_num}"));
                     }
+
                     continue;
                 } else if let Some(libc::EAGAIN) = err.raw_os_error() {
                     if args.verbose {
@@ -150,17 +154,22 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
                             "got EAGAIN when waiting for response message ({err}): {seq_num}"
                         ));
                     }
+
                     continue;
                 }
 
-                return Err(format!("socket receive failed while waiting for response message - {err}"))?;
+                return Err(format!(
+                    "socket receive failed while waiting for response message - {err}"
+                ))?;
             }
         };
 
         current_packet_loss_state = false;
 
-        let recv_time = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|err|format!("failed to get duration since UTC - {err}"))?.as_millis();
+        let recv_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to get duration since UTC - {err}"))?
+            .as_millis();
 
         let diff = recv_time as i128 - sent_time as i128;
 
@@ -217,17 +226,14 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
     log(&format!("password is: {}", password));
 
-    let mut buf = [0; 65507];
-
     let socket = UdpSocket::bind(args.bind.clone())
         .map_err(|err| format!("failed to create a UDP socket - {err}"))?;
 
-    let local_addr = socket.local_addr()
+    let local_addr = socket
+        .local_addr()
         .map_err(|err| format!("failed to get local address - {err}"))?;
-    log(&format!(
-        "listening on {} for connections...",
-        local_addr
-    ));
+
+    log(&format!("listening on {} for connections...", local_addr));
 
     let clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -235,8 +241,11 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let clients_clone = clients.clone();
     thread::spawn(move || remove_idle_clients(clients_clone));
 
+    let mut buf = [0; 65507];
+
     loop {
-        let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)
+        let (number_of_bytes, src_addr) = socket
+            .recv_from(&mut buf)
             .map_err(|err| format!("failed to receive from socket - {err}"))?;
 
         let packet = match packet_from_u8_array(&buf[..number_of_bytes], &password) {
@@ -256,10 +265,12 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         let packet_time = Instant::now();
 
-        let message = packet.to_u8_array(&password)
+        let message = packet
+            .to_u8_array(&password)
             .map_err(|err| format!("failed to turn packet to u8 array - {err}"))?;
 
-        socket.send_to(&message[..], src_addr)
+        socket
+            .send_to(&message[..], src_addr)
             .map_err(|err| format!("failed to send packet to client - {err}"))?;
 
         if args.verbose {
@@ -332,8 +343,10 @@ struct Packet {
 
 impl Packet {
     fn new(seq_num: u64) -> Result<Self, Box<dyn Error>> {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|err|format!("failed to get duration since UTC - {err}"))?.as_millis();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to get duration since UTC - {err}"))?
+            .as_millis();
 
         Ok(Self {
             seq_num: seq_num,
@@ -346,8 +359,7 @@ impl Packet {
 
         message[0..SEQ_NUM_SIZE].copy_from_slice(&self.seq_num.to_le_bytes());
 
-        message[TIMESTAMP_START..TIMESTAMP_END]
-            .copy_from_slice(&self.timestamp.to_le_bytes());
+        message[TIMESTAMP_START..TIMESTAMP_END].copy_from_slice(&self.timestamp.to_le_bytes());
 
         let mut mac = HmacSha256::new_from_slice(password.as_bytes())
             .map_err(|err| format!("failed to create mac - {err}"))?;
