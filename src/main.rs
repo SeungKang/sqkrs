@@ -98,7 +98,7 @@ fn version() -> Result<(), Box<dyn Error>> {
 fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let password = match env::var(PASSWORD_ENV_NAME) {
         Ok(x) => {
-            if x.len() == 0 {
+            if x.is_empty() {
                 Err(format!(
                     "password from {PASSWORD_ENV_NAME} environment variable is empty"
                 ))?
@@ -230,7 +230,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let password = match env::var(PASSWORD_ENV_NAME) {
         Ok(x) => {
-            if x.len() == 0 {
+            if x.is_empty() {
                 Err(format!(
                     "password from {PASSWORD_ENV_NAME} environment variable is empty"
                 ))?
@@ -392,7 +392,7 @@ impl Message {
 
 fn message_from_u8_array(bytes: &[u8], password: &str) -> Result<Message, Box<dyn Error>> {
     if bytes.len() != MESSAGE_SIZE {
-        return Err("invalid byte array size")?;
+        Err("invalid byte array size")?;
     }
 
     let received_mac = &bytes[MAC_START..MAC_END];
