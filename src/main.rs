@@ -112,6 +112,11 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
         }?,
     };
 
+    let addr: SocketAddr = args
+        .address
+        .parse()
+        .map_err(|err| format!("failed to parse listen address - {err}"))?;
+
     let socket = UdpSocket::bind("0.0.0.0:0")
         .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
@@ -122,24 +127,12 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
     log("attempting to send initial message to server...");
 
-    let mut seq_num: u64 = 0;
-    let mut current_packet_loss_state = false;
-    let mut last_packet_loss_state = false;
-    let mut last_recv_seq_num = seq_num;
+    let mut state = ClientState::new(addr, ClientThresholds::new());
     let mut buf = [0; 65507];
 
     loop {
-        if current_packet_loss_state != last_packet_loss_state {
-            last_packet_loss_state = current_packet_loss_state;
-            if current_packet_loss_state {
-                log("losing packets >:(");
-            } else {
-                log("no longer losing packets :)");
-            }
-        }
-
-        let msg =
-            Message::new(seq_num).map_err(|err| format!("failed to create new message - {err}"))?;
+        let msg = Message::new(state.seq_num)
+            .map_err(|err| format!("failed to create new message - {err}"))?;
 
         let message = msg
             .to_u8_array(&password)
@@ -151,30 +144,36 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         let sent_at = Instant::now();
 
+        state.sent_message();
+
         if args.verbose {
             log(&format!(
                 "message sent to: {}, seq_num: {}",
-                &args.address, seq_num
+                &args.address, state.need_seq_num
             ));
         }
-
-        seq_num += 1;
 
         let (n_bytes, from_addr) = match socket.recv_from(&mut buf) {
             Ok(x) => x,
             Err(err) => {
-                current_packet_loss_state = true;
-
                 if err.kind() == io::ErrorKind::TimedOut {
+                    state.timed_out_packet_loss();
+
                     if args.verbose {
-                        log(&format!("timed-out 🥺 waiting for response to: {seq_num}"));
+                        log(&format!(
+                            "timed-out 🥺 waiting for response to: {}",
+                            state.need_seq_num
+                        ));
                     }
 
                     continue;
                 } else if let Some(libc::EAGAIN) = err.raw_os_error() {
+                    state.timed_out_packet_loss();
+
                     if args.verbose {
                         log(&format!(
-                            "got EAGAIN when waiting for response message ({err}): {seq_num}"
+                            "got EAGAIN when waiting for response message ({}): {}",
+                            err, state.need_seq_num
                         ));
                     }
 
@@ -187,8 +186,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             }
         };
 
-        current_packet_loss_state = false;
-
+        let recv_at = Instant::now();
         let elapsed_ms = sent_at.elapsed().as_millis();
 
         if args.verbose {
@@ -216,14 +214,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             log("received initial server response");
         }
 
-        if response.seq_num > last_recv_seq_num && response.seq_num - last_recv_seq_num > 3 {
-            log(&format!(
-                "seq_num difference is greater than 3 ({}) - possible packet loss",
-                response.seq_num - last_recv_seq_num
-            ));
-        }
-
-        last_recv_seq_num = response.seq_num;
+        state.received_message(response, recv_at);
     }
 }
 
@@ -261,6 +252,8 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
     let clients_clone = clients.clone();
     thread::spawn(move || remove_idle_clients(clients_clone));
 
+    let client_thresholds = ClientThresholds::new();
+
     let mut buf = [0; 65507];
 
     loop {
@@ -285,6 +278,27 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         let recv_at = Instant::now();
 
+        // scopes the clients lock within the curly braces
+        {
+            let mut clients = clients.lock().unwrap();
+
+            if let Some(state) = clients.get_mut(&src_addr) {
+                state.received_message(msg.clone(), recv_at);
+            } else {
+                clients.insert(
+                    src_addr,
+                    ClientState::new_with_message(
+                        src_addr,
+                        client_thresholds.clone(),
+                        msg.clone(),
+                        recv_at,
+                    ),
+                );
+
+                log(&format!("client connected: {}", src_addr));
+            }
+        }
+
         let reply = msg
             .to_u8_array(&password)
             .map_err(|err| format!("failed to turn reply into u8 array - {err}"))?;
@@ -293,40 +307,22 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             .send_to(&reply[..], src_addr)
             .map_err(|err| format!("failed to send reply to client - {err}"))?;
 
+        // scopes the clients lock within the curly braces
+        {
+            // TODO: Is there a better way to do this that does
+            // not require locking the mutex a second time?
+            let mut clients = clients.lock().unwrap();
+
+            if let Some(state) = clients.get_mut(&src_addr) {
+                state.sent_reply(msg.seq_num);
+            }
+        }
+
         if args.verbose {
             log(&format!(
                 "reply sent to: {}, seq_num: {}",
                 src_addr, msg.seq_num
             ));
-        }
-
-        // scopes the clients lock within the curly braces
-        {
-            let mut clients = clients.lock().unwrap();
-
-            if let Some(state) = clients.get_mut(&src_addr) {
-                if msg.seq_num > state.last_msg.seq_num && msg.seq_num - state.last_msg.seq_num > 3
-                {
-                    log(&format!(
-                        "seq_num difference is greater than 3 ({}) - possible packet loss",
-                        msg.seq_num - state.last_msg.seq_num
-                    ));
-                }
-
-                state.last_msg = msg.clone();
-                state.last_recv_time = recv_at;
-            } else {
-                clients.insert(
-                    src_addr,
-                    ClientState {
-                        addr: src_addr,
-                        last_msg: msg.clone(),
-                        last_recv_time: recv_at,
-                    },
-                );
-
-                log(&format!("client connected: {}", src_addr));
-            }
         }
     }
 }
@@ -350,8 +346,135 @@ fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
 
 struct ClientState {
     addr: SocketAddr,
+    thresholds: ClientThresholds,
+    seq_num: u64,
+    need_seq_num: u64,
     last_msg: Message,
     last_recv_time: Instant,
+    losing_packets: bool,
+    num_lost_packets: u64,
+}
+
+impl ClientState {
+    fn new_with_message(
+        addr: SocketAddr,
+        thresholds: ClientThresholds,
+        msg: Message,
+        recv_at: Instant,
+    ) -> ClientState {
+        let mut state = ClientState::new(addr, thresholds);
+
+        state.seq_num = msg.seq_num;
+        state.need_seq_num = msg.seq_num + 1;
+        state.last_msg = msg;
+        state.last_recv_time = recv_at;
+
+        state
+    }
+
+    fn new(addr: SocketAddr, thresholds: ClientThresholds) -> ClientState {
+        Self {
+            thresholds: thresholds,
+            addr: addr,
+            seq_num: 0,
+            need_seq_num: 0,
+            last_msg: Message::empty(),
+            last_recv_time: Instant::now(),
+            losing_packets: false,
+            num_lost_packets: 0,
+        }
+    }
+
+    fn sent_message(&mut self) {
+        self.need_seq_num = self.seq_num;
+        self.seq_num += 1;
+    }
+
+    fn sent_reply(&mut self, current_seq_num: u64) {
+        self.need_seq_num = current_seq_num + 1;
+        self.seq_num = current_seq_num;
+    }
+
+    fn received_message(&mut self, msg: Message, when: Instant) {
+        if msg.seq_num != self.need_seq_num {
+            self.out_of_order_packet_loss(msg.clone());
+
+            self.last_msg = msg;
+            self.last_recv_time = when;
+
+            return;
+        }
+
+        // TODO: Maybe we should decrement by one and check if still losing packets?
+        if self.losing_packets {
+            log(&format!(
+                "no longer losing packets :) (lost {} packets, current sequence num is {})",
+                self.num_lost_packets, msg.seq_num
+            ));
+        }
+
+        self.losing_packets = false;
+        self.num_lost_packets = 0;
+
+        self.last_msg = msg;
+        self.last_recv_time = when;
+    }
+
+    fn out_of_order_packet_loss(&mut self, msg: Message) {
+        if self.losing_packets {
+            return;
+        }
+
+        if msg.seq_num > self.need_seq_num {
+            let diff = msg.seq_num - self.need_seq_num;
+
+            if diff > self.thresholds.max_seq_num_diff {
+                log(&format!(
+                    "possible packet loss: received packet with sequence number {}, which is {} greater than expected ({})",
+                    msg.seq_num, diff, self.need_seq_num
+                ))
+            }
+        } else {
+            let diff = self.need_seq_num - msg.seq_num;
+
+            if diff > self.thresholds.max_seq_num_diff {
+                log(&format!(
+                    "possible packet loss: received packet with sequence number {}, which is {} lower than expected ({})",
+                    msg.seq_num, diff, self.need_seq_num
+                ))
+            }
+        }
+    }
+
+    fn timed_out_packet_loss(&mut self) {
+        let new_loss_total = self.num_lost_packets + 1;
+
+        if !self.losing_packets && new_loss_total > self.thresholds.max_lost_packets {
+            self.losing_packets = true;
+
+            log(&format!(
+                "losing packets >:( (current sequence number is {}, max allowed loss is {} packets)",
+                self.need_seq_num, self.thresholds.max_lost_packets,
+            ));
+        }
+
+        self.num_lost_packets = new_loss_total;
+    }
+}
+
+#[derive(Clone)]
+struct ClientThresholds {
+    max_seq_num_diff: u64,
+    max_lost_packets: u64,
+}
+
+impl ClientThresholds {
+    fn new() -> ClientThresholds {
+        Self {
+            max_seq_num_diff: 10,
+            max_lost_packets: 10,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -371,6 +494,13 @@ impl Message {
             seq_num: seq_num,
             timestamp: timestamp,
         })
+    }
+
+    fn empty() -> Message {
+        Message {
+            seq_num: 0,
+            timestamp: 0,
+        }
     }
 
     fn to_u8_array(&self, password: &str) -> Result<[u8; MESSAGE_SIZE], Box<dyn Error>> {
