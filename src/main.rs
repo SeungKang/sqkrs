@@ -11,6 +11,8 @@ use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
 
+const VERSION: &str = "v0.0.1";
+
 const PASSWORD_ENV_NAME: &str = "PLIKE_PASSWORD";
 
 const SEQ_NUM_SIZE: usize = 8;
@@ -38,6 +40,7 @@ struct Argv {
 enum Commands {
     Client(ClientArgs),
     Server(ServerArgs),
+    Version,
 }
 
 #[derive(Args)]
@@ -79,7 +82,14 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
     match &args.command {
         Commands::Client(args) => client(args),
         Commands::Server(args) => server(args),
+        Commands::Version => version(),
     }?;
+
+    Ok(())
+}
+
+fn version() -> Result<(), Box<dyn Error>> {
+    println!("{VERSION}");
 
     Ok(())
 }
