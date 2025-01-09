@@ -408,7 +408,7 @@ impl ClientState {
         // TODO: Maybe we should decrement by one and check if still losing packets?
         if self.losing_packets {
             log(&format!(
-                "no longer losing packets :) (lost {} packets, current sequence num is {})",
+                "no longer losing packets :) - lost {} packets, current sequence num is {}",
                 self.num_lost_packets, msg.seq_num
             ));
         }
@@ -453,7 +453,8 @@ impl ClientState {
             self.losing_packets = true;
 
             log(&format!(
-                "losing packets >:( (current sequence number is {}, max allowed loss is {} packets)",
+                "losing packets >:( - timed-out waiting for sequence number {}, \
+                 max allowed missing packets is {}",
                 self.need_seq_num, self.thresholds.max_lost_packets,
             ));
         }
