@@ -6,3 +6,9 @@
 6. Client writes a message to stdout if it deviates more than 3 packets
 
 Client alerts when response is not receive within time limit.
+
+## TODO
+- short fixed timed udp speed test
+- implement type length value for messages
+- basic summary output of plike session (% packet loss, when it occurred, average time)
+- logging when packet loss has been repeatedly occurring

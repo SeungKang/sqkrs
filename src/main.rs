@@ -148,8 +148,8 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "message sent to: {}, seq_num: {}",
-                &args.address, state.need_seq_num
+                "[seq_num: {}] message sent to: {}",
+                state.need_seq_num, &args.address
             ));
         }
 
@@ -161,7 +161,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
                     if args.verbose {
                         log(&format!(
-                            "timed-out 🥺 waiting for response to: {}",
+                            "[seq_num: {}] timed-out 🥺 waiting for response",
                             state.need_seq_num
                         ));
                     }
@@ -172,8 +172,8 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
                     if args.verbose {
                         log(&format!(
-                            "got EAGAIN when waiting for response message ({}): {}",
-                            err, state.need_seq_num
+                            "[seq_num: {}] got EAGAIN when waiting for response message ({})",
+                            state.need_seq_num, err
                         ));
                     }
 
@@ -191,7 +191,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "received message seq_num: {}, elapsed: {} ms",
+                "[seq_num: {}] received message, elapsed: {} ms",
                 msg.seq_num, elapsed_ms
             ));
         }
@@ -271,8 +271,8 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "received message from: {}, seq_num: {}",
-                src_addr, msg.seq_num
+                "[seq_num: {}] received message from: {}",
+                msg.seq_num, src_addr
             ));
         }
 
@@ -320,8 +320,8 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
         if args.verbose {
             log(&format!(
-                "reply sent to: {}, seq_num: {}",
-                src_addr, msg.seq_num
+                "[seq_num: {}] reply sent to: {}",
+                msg.seq_num, src_addr
             ));
         }
     }
@@ -421,10 +421,6 @@ impl ClientState {
     }
 
     fn out_of_order_packet_loss(&mut self, msg: Message) {
-        if self.losing_packets {
-            return;
-        }
-
         if msg.seq_num > self.need_seq_num {
             let diff = msg.seq_num - self.need_seq_num;
 
@@ -454,7 +450,8 @@ impl ClientState {
 
             log(&format!(
                 "losing packets >:( - timed-out waiting for sequence number {}, \
-                 max allowed missing packets is {}",
+                 max allowed missing packets is {}, \
+                 will continue sending packets...",
                 self.need_seq_num, self.thresholds.max_lost_packets,
             ));
         }
