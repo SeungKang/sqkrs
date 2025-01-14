@@ -129,8 +129,17 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
     let mut state = ClientState::new(addr, ClientThresholds::new());
     let mut buf = [0; 65507];
+    let mut last_sent_at = Instant::now();
 
-    loop {
+    'send: loop {
+        let elapsed_ms = last_sent_at.elapsed().as_millis();
+
+        if elapsed_ms > 500 {
+            sleep(Duration::from_millis(500));
+        } else {
+            sleep(Duration::from_millis((500 - elapsed_ms) as u64));
+        }
+
         let msg = Message::new(state.seq_num)
             .map_err(|err| format!("failed to create new message - {err}"))?;
 
@@ -142,7 +151,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             .send_to(&message[..], &args.address)
             .map_err(|err| format!("failed to send message to server - {err}"))?;
 
-        let sent_at = Instant::now();
+        last_sent_at = Instant::now();
 
         state.sent_message();
 
@@ -153,68 +162,76 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             ));
         }
 
-        let (n_bytes, from_addr) = match socket.recv_from(&mut buf) {
-            Ok(x) => x,
-            Err(err) => {
-                if err.kind() == io::ErrorKind::TimedOut {
-                    state.timed_out_packet_loss();
+        let mut recv_one_message = false;
 
-                    if args.verbose {
-                        log(&format!(
-                            "[seq_num: {}] timed-out 🥺 waiting for response",
-                            state.need_seq_num
-                        ));
+        // continuously read from the socket to drain any buffered messages
+        'recv: loop {
+            let (n_bytes, from_addr) = match socket.recv_from(&mut buf) {
+                Ok(x) => x,
+                Err(err) => {
+                    if err.kind() == io::ErrorKind::TimedOut {
+                        if recv_one_message {
+                            continue 'send;
+                        }
+
+                        state.timed_out_packet_loss();
+
+                        if args.verbose {
+                            log(&format!(
+                                "[seq_num: {}] timed-out 🥺 waiting for response",
+                                state.need_seq_num
+                            ));
+                        }
+
+                        continue 'send;
+                    } else if let Some(libc::EAGAIN) = err.raw_os_error() {
+                        if recv_one_message {
+                            continue 'send;
+                        }
+
+                        state.timed_out_packet_loss();
+
+                        if args.verbose {
+                            log(&format!(
+                                "[seq_num: {}] got EAGAIN when waiting for response message ({})",
+                                state.need_seq_num, err
+                            ));
+                        }
+
+                        continue 'send;
                     }
 
-                    continue;
-                } else if let Some(libc::EAGAIN) = err.raw_os_error() {
-                    state.timed_out_packet_loss();
-
-                    if args.verbose {
-                        log(&format!(
-                            "[seq_num: {}] got EAGAIN when waiting for response message ({})",
-                            state.need_seq_num, err
-                        ));
-                    }
-
-                    continue;
+                    return Err(format!(
+                        "socket receive failed while waiting for response message - {err}"
+                    ))?;
                 }
+            };
 
-                return Err(format!(
-                    "socket receive failed while waiting for response message - {err}"
-                ))?;
+            recv_one_message = true;
+
+            let recv_at = Instant::now();
+
+            if args.verbose {
+                log(&format!(
+                    "[seq_num: {}] received message, elapsed: {} ms",
+                    msg.seq_num, elapsed_ms
+                ));
             }
-        };
 
-        let recv_at = Instant::now();
-        let elapsed_ms = sent_at.elapsed().as_millis();
+            let response = match message_from_u8_array(&buf[..n_bytes], &password) {
+                Ok(x) => x,
+                Err(err) => {
+                    log(&format!("failed to parse message from {from_addr} - {err}"));
+                    continue 'recv;
+                }
+            };
 
-        if args.verbose {
-            log(&format!(
-                "[seq_num: {}] received message, elapsed: {} ms",
-                msg.seq_num, elapsed_ms
-            ));
-        }
-
-        if elapsed_ms > 500 {
-            sleep(Duration::from_millis(500));
-        } else {
-            sleep(Duration::from_millis((500 - elapsed_ms) as u64));
-        }
-
-        let response = match message_from_u8_array(&buf[..n_bytes], &password) {
-            Ok(x) => x,
-            Err(err) => {
-                log(&format!("failed to parse message from {from_addr} - {err}"));
-                continue;
+            if response.seq_num == 0 {
+                log("received initial server response");
             }
-        };
 
-        if response.seq_num == 0 {
-            log("received initial server response");
+            state.received_message(response, recv_at);
         }
-
-        state.received_message(response, recv_at);
     }
 }
 
