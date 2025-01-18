@@ -47,6 +47,7 @@ enum Commands {
 struct ServerArgs {
     #[arg(short, long)]
     verbose: bool,
+
     #[arg(short, long, default_value = "0.0.0.0:55101")]
     bind: String,
 }
@@ -55,7 +56,11 @@ struct ServerArgs {
 struct ClientArgs {
     #[arg(short, long)]
     verbose: bool,
+
     address: String,
+
+    #[arg(short, long, default_value = "0.0.0.0:0")]
+    bind: String,
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -117,7 +122,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
         .parse()
         .map_err(|err| format!("failed to parse listen address - {err}"))?;
 
-    let socket = UdpSocket::bind("0.0.0.0:0")
+    let socket = UdpSocket::bind(&args.bind)
         .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
     // TODO: Support adjustable timeout or scaling
@@ -254,7 +259,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
 
     log(&format!("password is: {}", password));
 
-    let socket = UdpSocket::bind(args.bind.clone())
+    let socket = UdpSocket::bind(&args.bind)
         .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
     let local_addr = socket
