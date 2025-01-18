@@ -16,6 +16,10 @@ Client alerts when response is not receive within time limit.
 - verbose mode when it is in losing packets state
 - chaos mode that purposely loses packets, misses sequence numbers, sends delayed or out of order
 - breaking the code up into smaller libraries within the project
+- a mode that generates a password
+- add usage documentation using clap rust doc comments (look at example: dscx)
+- refactor big match expression into something smaller
+- add capsicum and pledge support someday, and macOS sandbox.framework
 
 Make this into a library
 
