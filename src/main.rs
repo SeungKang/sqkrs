@@ -176,7 +176,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
                 Err(err) => {
                     if err.kind() == io::ErrorKind::TimedOut {
                         if recv_one_message {
-                            continue 'send;
+                            break;
                         }
 
                         state.timed_out_packet_loss();
@@ -214,8 +214,6 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
             recv_one_message = true;
 
-            let recv_at = Instant::now();
-
             if args.verbose {
                 log(&format!(
                     "[seq_num: {}] received message, elapsed: {} ms",
@@ -235,7 +233,11 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
                 log("received initial server response");
             }
 
-            state.received_message(response, recv_at);
+            state.received_message(response);
+        }
+
+        if recv_one_message {
+            // TODO: log message when more than one message in socket
         }
     }
 }
@@ -298,14 +300,12 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             ));
         }
 
-        let recv_at = Instant::now();
-
         // scopes the clients lock within the curly braces
         {
             let mut clients = clients.lock().unwrap();
 
             if let Some(state) = clients.get_mut(&src_addr) {
-                state.received_message(msg.clone(), recv_at);
+                state.received_message(msg.clone());
             } else {
                 clients.insert(
                     src_addr,
@@ -313,7 +313,6 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
                         src_addr,
                         client_thresholds.clone(),
                         msg.clone(),
-                        recv_at,
                     ),
                 );
 
@@ -382,14 +381,13 @@ impl ClientState {
         addr: SocketAddr,
         thresholds: ClientThresholds,
         msg: Message,
-        recv_at: Instant,
     ) -> ClientState {
         let mut state = ClientState::new(addr, thresholds);
 
         state.seq_num = msg.seq_num;
         state.need_seq_num = msg.seq_num + 1;
         state.last_msg = msg;
-        state.last_recv_time = recv_at;
+        state.last_recv_time = Instant::now();
 
         state
     }
@@ -417,7 +415,9 @@ impl ClientState {
         self.seq_num = current_seq_num;
     }
 
-    fn received_message(&mut self, msg: Message, when: Instant) {
+    fn received_message(&mut self, msg: Message) {
+        let when = Instant::now();
+
         if msg.seq_num != self.need_seq_num {
             self.out_of_order_packet_loss(msg.clone());
 
