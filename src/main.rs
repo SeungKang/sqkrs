@@ -11,8 +11,6 @@ use rand::distr::Alphanumeric;
 use rand::{thread_rng, Rng};
 use sha2::Sha256;
 
-const VERSION: &str = "v0.0.1";
-
 const PACKET_INTERVAL: Duration = Duration::from_millis(500);
 
 const PASSWORD_ENV_NAME: &str = "UDPONG_PW";
@@ -32,7 +30,7 @@ const MAC_END: usize = MAC_START + MAC_SIZE;
 const MESSAGE_SIZE: usize = SEQ_NUM_SIZE + TIMESTAMP_SIZE + MAC_SIZE;
 
 #[derive(Parser)]
-#[command(version, about)]
+#[command(about)]
 struct Argv {
     #[command(subcommand)]
     command: Commands,
@@ -104,7 +102,7 @@ fn main_with_error() -> Result<(), Box<dyn Error>> {
 }
 
 fn version() -> Result<(), Box<dyn Error>> {
-    println!("{VERSION}");
+    println!("{}", env!("CARGO_PKG_VERSION").to_string());
 
     Ok(())
 }
