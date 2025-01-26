@@ -13,7 +13,9 @@ use sha2::Sha256;
 
 const VERSION: &str = "v0.0.1";
 
-const PASSWORD_ENV_NAME: &str = "PLIKE_PASSWORD";
+const PACKET_INTERVAL: Duration = Duration::from_millis(500);
+
+const PASSWORD_ENV_NAME: &str = "UDPONG_PW";
 
 const SEQ_NUM_SIZE: usize = 8;
 const SEQ_NUM_START: usize = 0;
@@ -38,27 +40,35 @@ struct Argv {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Launch the client
     Client(ClientArgs),
+    /// Launch the server
     Server(ServerArgs),
+    /// Print current version
     Version,
 }
 
 #[derive(Args)]
 struct ServerArgs {
+    /// Enable logging of all sent and receive packets
     #[arg(short, long)]
     verbose: bool,
 
+    /// Specify address to listen on for incoming packets
     #[arg(short, long, default_value = "0.0.0.0:55101")]
     bind: String,
 }
 
 #[derive(Args)]
 struct ClientArgs {
+    /// Enable logging of all sent and receive packets
     #[arg(short, long)]
     verbose: bool,
 
+    /// Specify address of the server to send and receive packets
     address: String,
 
+    /// Specify address of the client
     #[arg(short, long, default_value = "0.0.0.0:0")]
     bind: String,
 }
@@ -137,12 +147,12 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let mut last_sent_at = Instant::now();
 
     'send: loop {
-        let elapsed_ms = last_sent_at.elapsed().as_millis();
+        let elapsed_ms = last_sent_at.elapsed();
 
-        if elapsed_ms > 500 {
-            sleep(Duration::from_millis(500));
+        if elapsed_ms > PACKET_INTERVAL {
+            sleep(PACKET_INTERVAL);
         } else {
-            sleep(Duration::from_millis((500 - elapsed_ms) as u64));
+            sleep(PACKET_INTERVAL - elapsed_ms);
         }
 
         let msg = Message::new(state.seq_num)
@@ -216,7 +226,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
             if args.verbose {
                 log(&format!(
-                    "[seq_num: {}] received message, elapsed: {} ms",
+                    "[seq_num: {}] received message, elapsed: {:?} ms",
                     msg.seq_num, elapsed_ms
                 ));
             }

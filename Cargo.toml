@@ -1,7 +1,12 @@
 [package]
-name = "plike"
+name = "udpong"
 version = "0.1.0"
 edition = "2021"
+description = """
+udping is a tool for monitoring and logging UDP flow quality
+
+It provides a client and server to identify and log inconsistencies
+in UDP traffic, such as connection losses or out-of-order packets."""
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }

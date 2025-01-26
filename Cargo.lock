@@ -321,19 +321,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
 
 [[package]]
-name = "plike"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "hmac",
- "libc",
- "rand",
- "sha2",
- "time",
-]
-
-[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -481,6 +468,19 @@ name = "typenum"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
+
+[[package]]
+name = "udpong"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "hmac",
+ "libc",
+ "rand",
+ "sha2",
+ "time",
+]
 
 [[package]]
 name = "unicode-ident"
