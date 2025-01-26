@@ -63,10 +63,10 @@ struct ClientArgs {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Specify address of the server to send and receive packets
+    /// Specify address of the server
     address: String,
 
-    /// Specify address of the client
+    /// Specify address to bind to
     #[arg(short, long, default_value = "0.0.0.0:0")]
     bind: String,
 }
@@ -128,7 +128,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     let addr: SocketAddr = args
         .address
         .parse()
-        .map_err(|err| format!("failed to parse listen address - {err}"))?;
+        .map_err(|err| format!("failed to parse destination address - {err}"))?;
 
     let socket = UdpSocket::bind(&args.bind)
         .map_err(|err| format!("failed to create udp socket - {err}"))?;

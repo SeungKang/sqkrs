@@ -10,6 +10,8 @@
 - refactor big match expression into something smaller
 - add capsicum and pledge support someday, and macOS sandbox framework
 - user provided arguments for thresholds for logging
+- support dns names for the client
+- don't log losing packets if initial server connection reply was never received
 
 Make below into a library:
 
