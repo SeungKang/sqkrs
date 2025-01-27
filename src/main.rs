@@ -13,7 +13,7 @@ use sha2::Sha256;
 
 const PACKET_INTERVAL: Duration = Duration::from_millis(500);
 
-const PASSWORD_ENV_NAME: &str = "UDPONG_PW";
+const PASSWORD_ENV_NAME: &str = "SQKRS_PW";
 
 const SEQ_NUM_SIZE: usize = 8;
 const SEQ_NUM_START: usize = 0;

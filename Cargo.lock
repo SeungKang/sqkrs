@@ -422,6 +422,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "sqkrs"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "hmac",
+ "libc",
+ "rand",
+ "sha2",
+ "time",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -468,19 +481,6 @@ name = "typenum"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
-
-[[package]]
-name = "udpong"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "hmac",
- "libc",
- "rand",
- "sha2",
- "time",
-]
 
 [[package]]
 name = "unicode-ident"

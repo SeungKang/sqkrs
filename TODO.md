@@ -1,9 +1,9 @@
 ## TODO
 - short fixed timed udp speed test
 - implement type length value for messages
-- press i to enable verbose while plike is running, basic summary output of plike session (% packet loss, when it occurred, average time)
+- press i to enable verbose while sqkrs is running, basic summary output of sqkrs session (% packet loss, when it occurred, average time)
 - logging when packet loss has been repeatedly occurring
-- press v to enable verbose while plike is running
+- press v to enable verbose while sqkrs is running
 - verbose mode when it is in losing packets state
 - chaos mode that purposely loses packets, misses sequence numbers, sends delayed or out of order
 - breaking the code up into smaller libraries within the project

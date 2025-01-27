@@ -1,9 +1,9 @@
 [package]
-name = "udpong"
+name = "sqkrs"
 version = "0.1.0"
 edition = "2021"
 description = """
-udping is a tool for monitoring and logging UDP flow quality
+sqkrs is a tool for monitoring and logging UDP flow quality
 
 It provides a client and server to identify and log inconsistencies
 in UDP traffic, such as connection losses or out-of-order packets."""
