@@ -57,7 +57,7 @@ struct ServerArgs {
     bind: String,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct ClientArgs {
     /// Enable logging of all sent and receive packets
     #[arg(short, long)]
@@ -140,12 +140,39 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
     log("attempting to send initial message to server...");
 
-    let mut state = ClientState::new(addr, ClientThresholds::new());
-    let mut buf = [0; 65507];
-    let mut last_sent_at = Instant::now();
+    let mut cli = Client{
+        // TODO: in the future refactor to not require a clone
+        args: args.clone(),
+        state: ClientState::new(addr, ClientThresholds::new()),
+        buf: [0; 65507],
+        last_sent_at: Instant::now(),
+        password,
+        socket,
+    };
 
-    'send: loop {
-        let elapsed_ms = last_sent_at.elapsed();
+    loop {
+        cli.send_loop()?;
+    }
+}
+
+struct Client {
+    args: ClientArgs,
+    state: ClientState,
+    buf: [u8;65507],
+    last_sent_at: Instant,
+    password: String,
+    socket: UdpSocket,
+}
+
+impl Client {
+    fn send_loop(&mut self) -> Result<(), Box<dyn Error>>  {
+        loop {
+            self.send()?;
+        }
+    }
+
+    fn send(&mut self) -> Result<(), Box<dyn Error>>  {
+        let elapsed_ms = self.last_sent_at.elapsed();
 
         if elapsed_ms > PACKET_INTERVAL {
             sleep(PACKET_INTERVAL);
@@ -153,65 +180,73 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
             sleep(PACKET_INTERVAL - elapsed_ms);
         }
 
-        let msg = Message::new(state.seq_num)
+        let msg = Message::new(self.state.seq_num)
             .map_err(|err| format!("failed to create new message - {err}"))?;
 
         let message = msg
-            .to_u8_array(&password)
+            .to_u8_array(&self.password)
             .map_err(|err| format!("failed to turn message into u8 array - {err}"))?;
 
-        socket
-            .send_to(&message[..], &args.address)
+        self.socket
+            .send_to(&message[..], &self.args.address)
             .map_err(|err| format!("failed to send message to server - {err}"))?;
 
-        last_sent_at = Instant::now();
+        self.last_sent_at = Instant::now();
 
-        state.sent_message();
+        self.state.sent_message();
 
-        if args.verbose {
+        if self.args.verbose {
             log(&format!(
                 "[seq_num: {}] message sent to: {}",
-                state.need_seq_num, &args.address
+                self.state.need_seq_num, &self.args.address
             ));
         }
 
+        self.recv_reply(elapsed_ms, msg)
+            .map_err(|err|format!("failed to receive reply from server - {err}"))?;
+
+        Ok(())
+    }
+
+    fn recv_reply(&mut self, elapsed_ms: Duration, msg: Message) -> Result<(), Box<dyn Error>> {
         let mut recv_one_message = false;
 
+        // TODO: log message when more than one message in socket
         // continuously read from the socket to drain any buffered messages
-        'recv: loop {
-            let (n_bytes, from_addr) = match socket.recv_from(&mut buf) {
+        loop {
+            let (n_bytes, from_addr) = match self.socket.recv_from(&mut self.buf) {
                 Ok(x) => x,
                 Err(err) => {
                     if err.kind() == io::ErrorKind::TimedOut {
                         if recv_one_message {
-                            break;
+                            return Ok(());
                         }
 
-                        state.timed_out_packet_loss();
+                        self.state.timed_out_packet_loss();
 
-                        if args.verbose {
+                        if self.args.verbose {
                             log(&format!(
                                 "[seq_num: {}] timed-out 🥺 waiting for response",
-                                state.need_seq_num
+                                self.state.need_seq_num
                             ));
                         }
 
-                        continue 'send;
+                        return Ok(());
                     } else if let Some(libc::EAGAIN) = err.raw_os_error() {
                         if recv_one_message {
-                            continue 'send;
+                            return Ok(());
                         }
 
-                        state.timed_out_packet_loss();
+                        self.state.timed_out_packet_loss();
 
-                        if args.verbose {
+                        if self.args.verbose {
                             log(&format!(
                                 "[seq_num: {}] got EAGAIN when waiting for response message ({})",
-                                state.need_seq_num, err
+                                self.state.need_seq_num, err
                             ));
                         }
 
-                        continue 'send;
+                        return Ok(());
                     }
 
                     return Err(format!(
@@ -222,18 +257,18 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 
             recv_one_message = true;
 
-            if args.verbose {
+            if self.args.verbose {
                 log(&format!(
                     "[seq_num: {}] received message, elapsed: {:?} ms",
                     msg.seq_num, elapsed_ms
                 ));
             }
 
-            let response = match message_from_u8_array(&buf[..n_bytes], &password) {
+            let response = match message_from_u8_array(&self.buf[..n_bytes], &self.password) {
                 Ok(x) => x,
                 Err(err) => {
                     log(&format!("failed to parse message from {from_addr} - {err}"));
-                    continue 'recv;
+                    continue;
                 }
             };
 
@@ -241,11 +276,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
                 log("received initial server response");
             }
 
-            state.received_message(response);
-        }
-
-        if recv_one_message {
-            // TODO: log message when more than one message in socket
+            self.state.received_message(response);
         }
     }
 }
