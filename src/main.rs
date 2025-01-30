@@ -158,14 +158,14 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
 struct Client {
     args: ClientArgs,
     state: ClientState,
-    buf: [u8;65507],
+    buf: [u8; 65507],
     last_sent_at: Instant,
     password: String,
     socket: UdpSocket,
 }
 
 impl Client {
-    fn send(&mut self) -> Result<(), Box<dyn Error>>  {
+    fn send(&mut self) -> Result<(), Box<dyn Error>> {
         let elapsed_ms = self.last_sent_at.elapsed();
 
         if elapsed_ms > PACKET_INTERVAL {
@@ -197,7 +197,7 @@ impl Client {
         }
 
         self.recv_reply(elapsed_ms, msg)
-            .map_err(|err|format!("failed to receive reply from server - {err}"))?;
+            .map_err(|err| format!("failed to receive reply from server - {err}"))?;
 
         Ok(())
     }
@@ -342,11 +342,7 @@ fn server(args: &ServerArgs) -> Result<(), Box<dyn Error>> {
             } else {
                 clients.insert(
                     src_addr,
-                    ClientState::new_with_message(
-                        src_addr,
-                        client_thresholds.clone(),
-                        msg.clone(),
-                    ),
+                    ClientState::new_with_message(src_addr, client_thresholds.clone(), msg.clone()),
                 );
 
                 log(&format!("client connected: {}", src_addr));
