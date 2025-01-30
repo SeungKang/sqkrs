@@ -151,7 +151,7 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
     };
 
     loop {
-        cli.send_loop()?;
+        cli.send()?;
     }
 }
 
@@ -165,12 +165,6 @@ struct Client {
 }
 
 impl Client {
-    fn send_loop(&mut self) -> Result<(), Box<dyn Error>>  {
-        loop {
-            self.send()?;
-        }
-    }
-
     fn send(&mut self) -> Result<(), Box<dyn Error>>  {
         let elapsed_ms = self.last_sent_at.elapsed();
 
