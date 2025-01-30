@@ -125,25 +125,19 @@ fn client(args: &ClientArgs) -> Result<(), Box<dyn Error>> {
         }?,
     };
 
-    let addr: SocketAddr = args
-        .address
-        .parse()
-        .map_err(|err| format!("failed to parse destination address - {err}"))?;
-
     let socket = UdpSocket::bind(&args.bind)
         .map_err(|err| format!("failed to create udp socket - {err}"))?;
 
-    // TODO: Support adjustable timeout or scaling
     socket
         .set_read_timeout(Some(Duration::from_millis(100)))
         .map_err(|err| format!("failed to set the read timeout of socket - {err}"))?;
 
     log("attempting to send initial message to server...");
 
-    let mut cli = Client{
+    let mut cli = Client {
         // TODO: in the future refactor to not require a clone
         args: args.clone(),
-        state: ClientState::new(addr, ClientThresholds::new()),
+        state: ClientState::new(args.address.clone(), ClientThresholds::new()),
         buf: [0; 65507],
         last_sent_at: Instant::now(),
         password,
@@ -395,7 +389,7 @@ fn remove_idle_clients(clients: Arc<Mutex<HashMap<SocketAddr, ClientState>>>) {
 }
 
 struct ClientState {
-    addr: SocketAddr,
+    addr: String,
     thresholds: ClientThresholds,
     seq_num: u64,
     need_seq_num: u64,
@@ -411,7 +405,7 @@ impl ClientState {
         thresholds: ClientThresholds,
         msg: Message,
     ) -> ClientState {
-        let mut state = ClientState::new(addr, thresholds);
+        let mut state = ClientState::new(addr.to_string(), thresholds);
 
         state.seq_num = msg.seq_num;
         state.need_seq_num = msg.seq_num + 1;
@@ -421,7 +415,7 @@ impl ClientState {
         state
     }
 
-    fn new(addr: SocketAddr, thresholds: ClientThresholds) -> ClientState {
+    fn new(addr: String, thresholds: ClientThresholds) -> ClientState {
         Self {
             thresholds: thresholds,
             addr: addr,

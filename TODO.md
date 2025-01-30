@@ -1,4 +1,5 @@
 ## TODO
+
 - short fixed timed udp speed test
 - implement type length value for messages
 - press i to enable verbose while sqkrs is running, basic summary output of sqkrs session (% packet loss, when it occurred, average time)
@@ -7,11 +8,11 @@
 - verbose mode when it is in losing packets state
 - chaos mode that purposely loses packets, misses sequence numbers, sends delayed or out of order
 - breaking the code up into smaller libraries within the project
-- refactor big match expression into something smaller
 - add capsicum and pledge support someday, and macOS sandbox framework
 - user provided arguments for thresholds for logging
-- support dns names for the client
 - don't log losing packets if initial server connection reply was never received
+- changing when the round trip message time changes significantly
+- extract only what we need from ClientArgs to get rid of clone
 
 Make below into a library:
 
