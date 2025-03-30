@@ -73,32 +73,28 @@ Options:
 
 ## Examples
 
-Using default client and server address. Running sqkrs in verbose mode.
+Basic configuration:
 
 ```console
 $ # on server computer
-$ sqkrs server -v
+$ sqkrs server
 2025/01/01 01:35:25Z password is: REDACTED
-2025/01/01 01:35:25Z listening on 127.0.0.1:55101 for connections...
+2025/01/01 01:35:25Z listening on 0.0.0.0:55101 for connections...
 
 $ # on client computer
 $ export SQKRS_PW=REDACTED
-sqkrs client 127.0.0.1:55111 -v
+$ sqkrs client 192.168.1.2:55101
 2025/01/26 17:45:48Z attempting to send initial message to server...
 2025/01/26 17:45:48Z received initial server response
 ```
 
-Using custom client and server address.
+Custom client and server addresses:
 
 ```console
 $ # on server computer
 $ sqkrs server --bind 127.0.0.1:55111
-2025/01/01 01:35:25Z password is: REDACTED
-2025/01/01 01:35:25Z listening on 127.0.0.1:55111 for connections...
 
 $ # on client computer
 $ export SQKRS_PW=REDACTED
 $ sqkrs client --bind 127.0.0.1:2000 127.0.0.1:55111
-2025/01/26 17:45:48Z attempting to send initial message to server...
-2025/01/26 17:45:48Z received initial server response
 ```
