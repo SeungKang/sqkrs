@@ -21,7 +21,18 @@ server or set via the SQKRS_PW environment variable
 
 ## Installation
 
-Before installation, [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html) must be installed.
+The following dependencies are required to install sqkrs:
+
+- git
+- rust (cargo)
+
+To install without cloning the source code:
+
+```sh
+cargo install --git https://gitlab.com/SeungKang/sqkrs
+```
+
+Alternatively, install from a copy of the source code:
 
 ```sh
 git clone https://github.com/SeungKang/sqkrs
