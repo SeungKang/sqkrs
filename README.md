@@ -1,4 +1,4 @@
-# sqkrs
+# sqkrs 🐀
 
 Sequentially-Keyed Reachability Sampler (sqkrs, pronounced "squeakers")
 
